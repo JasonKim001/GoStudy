@@ -1,4 +1,3 @@
 # GoStudy
-## GoStudy
-### GoStudy
+## Go Example Study
 
