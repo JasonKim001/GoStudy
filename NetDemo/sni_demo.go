@@ -3,52 +3,49 @@ package main
 import (
 	"fmt"
 	"log"
+	"regexp"
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
 )
 
-var udpCount = 0
-var tcpCount = 0
-var sniCount = 0
+// 从 TLS 握手消息中提取 SNI 信息
+func getSNI(buf []byte) string {
+	var sni string
+	re := regexp.MustCompile(`^(?:[a-z0-9-]+\.)+[a-z]+$`)
 
-// Function to extract SNI from TLS handshake
-func getSNI(data []byte) string {
-	if len(data) < 5 || data[0] != 0x16 {
-		return ""
-	}
-	for i := 0; i < len(data)-1; i++ {
-		if data[i] == 0x00 && data[i+1] == 0x00 {
-			return ""
-		}
-		if data[i] == 0x00 && data[i+1] == 0x17 {
-			j := i + 5
-			for j < len(data)-1 {
-				if data[j] == 0x00 {
+	for i := 0; i < len(buf); i++ {
+		if i > 0 && buf[i-1] == 0 && buf[i] == 0 {
+			start := i + 2
+			length := int(buf[i+1])
+			end := start + length
+			if start < end && end <= len(buf) {
+				str := string(buf[start:end])
+				if re.MatchString(str) {
+					sni = str
 					break
 				}
-				j++
 			}
-			return string(data[i+5 : j])
 		}
 	}
-	return ""
+
+	return sni
 }
 
 func main() {
-	iface := "eth0" // Replace with your network interface
+	iface := "lo" // 替换为你的网卡接口名
 	handle, err := pcap.OpenLive(iface, 1600, true, pcap.BlockForever)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer handle.Close()
 
-	// Set up a packet source to read packets from the handle
+	// 设置 PacketSource 从网卡读取数据包
 	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
 
 	for packet := range packetSource.Packets() {
-		// Process packet here
+		// 处理数据包
 		ethernetLayer := packet.Layer(layers.LayerTypeEthernet)
 		if ethernetLayer == nil {
 			continue
@@ -65,30 +62,21 @@ func main() {
 			tcpLayer := packet.Layer(layers.LayerTypeTCP)
 			if tcpLayer != nil {
 				tcp, _ := tcpLayer.(*layers.TCP)
-				if tcpCount == 0 {
-					fmt.Printf("TCP Packet: %s:%d -> %s:%d\n", ip.SrcIP, tcp.SrcPort, ip.DstIP, tcp.DstPort)
-					tcpCount += 1
-				}
+				fmt.Printf("TCP 数据包: %s:%d -> %s:%d\n", ip.SrcIP, tcp.SrcPort, ip.DstIP, tcp.DstPort)
 
 				if tcp.DstPort == 443 {
+					// 提取 TLS 数据包中的 SNI 信息
 					sni := getSNI(tcp.Payload)
 					if sni != "" {
-						if sniCount == 0 {
-							fmt.Printf("SNI: %s\n", sni)
-							sniCount += 1
-						}
-
+						fmt.Printf("SNI: %s\n", sni)
 					}
 				}
 			}
 		case layers.IPProtocolUDP:
 			udpLayer := packet.Layer(layers.LayerTypeUDP)
 			if udpLayer != nil {
-				if udpCount == 0 {
-					udp, _ := udpLayer.(*layers.UDP)
-					fmt.Printf("UDP Packet: %s:%d -> %s:%d\n", ip.SrcIP, udp.SrcPort, ip.DstIP, udp.DstPort)
-					udpCount += 1
-				}
+				udp, _ := udpLayer.(*layers.UDP)
+				fmt.Printf("UDP 数据包: %s:%d -> %s:%d\n", ip.SrcIP, udp.SrcPort, ip.DstIP, udp.DstPort)
 			}
 		}
 	}
